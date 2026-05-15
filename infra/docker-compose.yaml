@@ -1,0 +1,16 @@
+services:
+  grafana:
+    image: grafana/grafana:11.1.2
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      - GF_SERVER_ROOT_URL=http://grafana.local/
+      - GF_PLUGINS_PREINSTALL=golioth-websocket-datasource
+    ports:
+      - '3000:3000'
+    volumes:
+      - 'grafana_storage:/var/lib/grafana'
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+volumes:
+  grafana_storage: {}
