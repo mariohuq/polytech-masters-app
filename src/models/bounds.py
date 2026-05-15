@@ -16,7 +16,7 @@ class BoundsDetector(BaseEstimator, ClassifierMixin):
         Format: {'dimension_name': (low_threshold, high_threshold)}
         - low_threshold: Minimum inclusive value.
         - high_threshold: Maximum inclusive value.
-        Dimensions not included in this dictionary will default to 
+        Dimensions not included in this dictionary will default to
         (-infinity, +infinity) and will never trigger an out-of-bounds flag.
 
         Note: Order of features is induced from fit, not from bounds keys!
@@ -39,7 +39,7 @@ class BoundsDetector(BaseEstimator, ClassifierMixin):
         """
         # Capture feature count for validation
         self.n_features_in_ = X.shape[1]
-        
+
         # Initialize vectors with 'infinite' bounds.
         # This ensures columns without specific rules remain "In Bounds" (0).
         self.low_vec_ = np.full(self.n_features_in_, -np.inf)
@@ -87,13 +87,13 @@ class BoundsDetector(BaseEstimator, ClassifierMixin):
 
         # --- Vectorized Logic Explained ---
         # NumPy Broadcasting allows us to compare a 2D matrix (Samples x Dims)
-        # against a 1D vector (Dims). 
+        # against a 1D vector (Dims).
         # (X_val < self.low_vec_) results in a boolean matrix of the same shape as X.
-        
+
         lower_mask = X_val < self.low_vec_
         upper_mask = X_val > self.high_vec_
-        
+
         # Combine masks: True if either condition is met
         out_of_bounds = lower_mask | upper_mask
-        
+
         return out_of_bounds.astype(int)
