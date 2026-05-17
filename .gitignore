@@ -1,3 +1,6 @@
 *__pycache__
 .env
 data/registries/
+frontend/node_modules/
+frontend/dist/
+.venv
