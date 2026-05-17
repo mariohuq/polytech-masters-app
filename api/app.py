@@ -11,9 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from api.generator import MockSeriesGenerator
-from models import UnifiedAnomalyDetector, list_models
+from api.registry_routes import router as registry_router
+from models import DetectorKind, UnifiedAnomalyDetector, list_models
 
 app = FastAPI(title="Polytech masters — mock stream API", version="0.1.0")
+app.include_router(registry_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -35,6 +37,29 @@ def _parse_config(raw: str | None) -> dict[str, Any]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _check_readiness() -> dict[str, Any]:
+    probe = np.zeros((8, 2), dtype=float)
+    checked: list[str] = []
+    for kind in DetectorKind:
+        det = UnifiedAnomalyDetector(kind)
+        det.fit(probe)
+        _ = det.predict(probe)
+        _ = det.predict_proba(probe)
+        checked.append(kind.value)
+    return {"status": "ready", "models": checked}
+
+
+@app.get("/readiness")
+def readiness() -> dict[str, Any]:
+    try:
+        return _check_readiness()
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "not_ready", "error": str(e)},
+        ) from e
 
 
 @app.get("/models")
@@ -107,7 +132,7 @@ async def get_anomaly_stream_engine(
 
 @app.get("/mock/stream")
 async def mock_stream(
-    model: str = Query("robust_rolling", description="Имя из GET /models"),
+    model: str = Query("spikes", description="bounds | spikes | glitch — см. GET /models"),
     n_features: int = Query(2, ge=1, le=32),
     seed: int | None = Query(None),
     sleep_ms: float = Query(50.0, ge=0.0, description="Пауза между событиями (мс); 0 — без задержки"),

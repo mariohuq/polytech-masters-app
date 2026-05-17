@@ -1,5 +1,8 @@
+
+
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, TypeAlias
 
 import numpy as np
@@ -7,63 +10,57 @@ import numpy.typing as npt
 import pandas as pd
 from sklearn.base import BaseEstimator
 
-
 from .bounds import BoundsDetector
-from .glitch import ProbabilisticStuckSignalDetector, StuckSignalDetector
-from .spikes import (
-    DetrendedRollingOutlier,
-    RobustDetrendedRollingOutlier,
-    RobustRollingOutlier,
-    RobustRollingOutlierLookahead,
-    SklearnWindowOutlier,
-)
+from .glitch import ProbabilisticStuckSignalDetector
+from .spikes import RobustRollingOutlierLookahead
 
-
-# Вход сигналов: строки — моменты времени (t = 0 … n_samples-1), столбцы — признаки (сенсоры / каналы).
-# Рекомендуется float (NaN допустимы там, где это поддерживает конкретный бэкенд).
+# Строки — шаги времени t, столбцы — признаки (сенсоры).
 TimeSeriesX: TypeAlias = npt.NDArray[np.floating] | pd.DataFrame
 
-REGISTRY: dict[str, type] = {
-    "bounds": BoundsDetector,
-    "stuck": StuckSignalDetector,
-    "stuck_proba": ProbabilisticStuckSignalDetector,
-    "robust_rolling": RobustRollingOutlier,
-    "detrended_rolling": DetrendedRollingOutlier,
-    "robust_detrended": RobustDetrendedRollingOutlier,
-    "sklearn_window": SklearnWindowOutlier,
-    "robust_rolling_lookahead": RobustRollingOutlierLookahead,
+
+class DetectorKind(str, Enum):
+    BOUNDS = "bounds"
+    SPIKES = "spikes"
+    GLITCH = "glitch"
+
+
+# Реализация по умолчанию для каждого вида (можно переопределить через estimator_params).
+_DEFAULT_ESTIMATORS: dict[DetectorKind, type[BaseEstimator]] = {
+    DetectorKind.BOUNDS: BoundsDetector,
+    DetectorKind.SPIKES: RobustRollingOutlierLookahead,
+    DetectorKind.GLITCH: ProbabilisticStuckSignalDetector,
 }
 
 
 def list_models() -> list[str]:
-    """Список допустимых значений аргумента ``UnifiedAnomalyDetector(model=...)``."""
-    return sorted(REGISTRY.keys())
+    """Имена для API / query-параметра ``model``."""
+    return [k.value for k in DetectorKind]
+
+
+def _coerce_kind(model: DetectorKind | str) -> DetectorKind:
+    if isinstance(model, DetectorKind):
+        return model
+    try:
+        return DetectorKind(model)
+    except ValueError as e:
+        raise ValueError(
+            f"Неизвестная модель {model!r}. Доступно: {list_models()}"
+        ) from e
 
 
 class UnifiedAnomalyDetector(BaseEstimator):
-    """Обёртка над детекторами проекта в sklearn-стиле.
+    """Обёртка над тремя детекторами: выбор через ``DetectorKind`` или строку ``bounds`` / ``spikes`` / ``glitch``.
 
-    **Данные ``X`` (и в ``fit``, и в ``predict`` / ``predict_proba``)**
+  **Данные ``X``** — матрица ``(n_samples, n_features)``: ``ndarray`` (float) или ``DataFrame``.
+  **Ответ** — ``predict`` / ``predict_proba`` формы ``(n_samples, n_features)``.
 
-    - **Смысл:** многомерный временной ряд без явной колонки времени: индекс строки
-      — дискретный шаг ``t``, столбцы — независимые измеряемые величины
-      (размерность ``n_features``).
-    - **Форма:** ``(n_samples, n_features)``, где ``n_samples ≥ 1``, ``n_features ≥ 1``.
-    - **Тип:** удобнее всего ``numpy.ndarray`` с вещественным ``dtype`` (например ``float64``)
-      или ``pandas.DataFrame`` (числовые столбцы).
-      Часть бэкендов внутри приводит ``ndarray`` к ``DataFrame``; для ``BoundsDetector``
-      при ``fit`` на ``DataFrame`` словарь ``bounds`` может ключоваться **именами столбцов**,
-      на ``ndarray`` — порядок границ соответствует **номеру столбца** (см. ``BoundsDetector``).
-    - **Ответы:** ``predict`` и ``predict_proba`` возвращают ``ndarray`` формы
-      ``(n_samples, n_features)`` — по одному значению на каждую ячейку ``X``
-      (бинарная метка или вероятность «аномалии» в смысле конкретной модели).
-
-    Выбор реализации — строка ``model``, гиперпараметры — ``estimator_params`` или ``**kwargs``.
+  Гиперпараметры конкретного бэкенда передаются в ``estimator_params`` или как ``**kwargs``
+  (например ``bounds={...}`` для ``bounds``, ``window=15`` для ``spikes``).
     """
 
     def __init__(
         self,
-        model: str = "robust_rolling",
+        model: DetectorKind | str = DetectorKind.SPIKES,
         estimator_params: dict[str, Any] | None = None,
         **kwargs: Any,
     ):
@@ -73,51 +70,57 @@ class UnifiedAnomalyDetector(BaseEstimator):
         self.estimator_params = merged
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
-        return {"model": self.model, "estimator_params": dict(self.estimator_params)}
+        model = self.model.value if isinstance(self.model, DetectorKind) else self.model
+        return {"model": model, "estimator_params": dict(self.estimator_params)}
 
     def set_params(self, **params: Any) -> UnifiedAnomalyDetector:
         if not params:
             return self
         params = dict(params)
         if "model" in params:
-            self.model = params.pop("model")
+            self.model = _coerce_kind(params.pop("model"))
         if "estimator_params" in params:
             self.estimator_params = dict(params.pop("estimator_params"))
         self.estimator_params.update(params)
         self._clear_estimator()
         return self
 
+    @property
+    def kind_(self) -> DetectorKind:
+        """Вид детектора: после ``fit`` — зафиксированный, иначе из ``model``."""
+        if hasattr(self, "kind__"):
+            return self.kind__
+        return _coerce_kind(self.model)
+
     def _clear_estimator(self) -> None:
-        if hasattr(self, "estimator_"):
-            del self.estimator_
+        for attr in ("estimator_", "kind__"):
+            if hasattr(self, attr):
+                delattr(self, attr)
 
-    def _build(self) -> BaseEstimator:
-        if self.model not in REGISTRY:
-            raise ValueError(
-                f"Неизвестная модель {self.model!r}. Доступно: {list_models()}"
-            )
-        cls = REGISTRY[self.model]
-        return cls(**dict(self.estimator_params))
+    def _build(self) -> tuple[DetectorKind, BaseEstimator]:
+        kind = _coerce_kind(self.model)
+        cls = _DEFAULT_ESTIMATORS[kind]
+        return kind, cls(**dict(self.estimator_params))
 
-    def fit(self, X, y=None) -> UnifiedAnomalyDetector:
-        est = self._build()
+    def fit(self, X: TimeSeriesX, y: None = None) -> UnifiedAnomalyDetector:
+        kind, est = self._build()
         if hasattr(est, "fit"):
             est.fit(X, y)
+        self.kind__ = kind
         self.estimator_: BaseEstimator = est
         return self
 
-    def predict(self, X) -> np.ndarray:
+    def predict(self, X: TimeSeriesX) -> npt.NDArray[np.int32]:
         self._require_estimator()
         est = self.estimator_
         if hasattr(est, "predict"):
-            pred = est.predict(X)
-            return np.asarray(pred, dtype=np.int32)
+            return np.asarray(est.predict(X), dtype=np.int32)
         if hasattr(est, "predict_proba"):
             proba = est.predict_proba(X)
             return (np.asarray(proba, dtype=float) >= 0.5).astype(np.int32)
         raise TypeError(f"{type(est).__name__}: нет predict и predict_proba")
 
-    def predict_proba(self, X) -> np.ndarray:
+    def predict_proba(self, X: TimeSeriesX) -> npt.NDArray[np.floating]:
         self._require_estimator()
         est = self.estimator_
         if hasattr(est, "predict_proba"):
