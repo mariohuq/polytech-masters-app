@@ -7,13 +7,13 @@ from .spikes import (
     RobustRollingOutlierLookahead,
     SklearnWindowOutlier,
 )
-from .wrapper import REGISTRY, UnifiedAnomalyDetector, list_models
+from .wrapper import DetectorKind, UnifiedAnomalyDetector, list_models
 
 __all__ = [
     "BoundsDetector",
     "DetrendedRollingOutlier",
+    "DetectorKind",
     "ProbabilisticStuckSignalDetector",
-    "REGISTRY",
     "RobustDetrendedRollingOutlier",
     "RobustRollingOutlier",
     "RobustRollingOutlierLookahead",
